@@ -1,0 +1,5 @@
+To run consistent hashing:
+
+go build hashing.go node.go 
+
+./hashing
