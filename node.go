@@ -9,6 +9,10 @@ type Node struct {
 	id        int
 	tokens	 [5]int
 	data      [5]map[string]Data
+	request 	 chan Request
+	getReturn chan Data
+	putReturn chan int
+	doneCh    chan int
 }
 
 type VirtualNode struct {
@@ -32,6 +36,17 @@ type ClockEntry struct{
 	counter	int
 }
 
+type Request struct {
+	//kind is 0 for get, 1 for put
+	kind     int
+	key 		string
+	data     Data
+	prefList []*VirtualNode
+	N 			int
+	R 			int 
+	W 	      int       
+}
+
 type DB struct {
 	nodes  		[]*Node
 	ring		   []VirtualNode
@@ -45,8 +60,46 @@ type DB struct {
 func (node *Node) run() {
 	//main function for running a node
 	for {
-
+		//read and handle requests as are received
+		request := <-node.request
+		if request.type == 0 {
+			node.handleGet(request)
+		} else {
+			node.handlePut(request)
+		}
+		//wait for done signal before handling more requests
+		<-node.doneCh
 	}
+}
+
+func (node *Node) handleGet(request Request) {
+	//signal that request is done being handled
+	node.doneCh <- 1
+}
+
+func (node *Node) handlePut(request Request) {
+	//signal that request is done being handled
+	node.doneCh <- 1
+}
+
+
+func (db *DB) get(key string) Data {
+	prefList = db.getPreferenceList(key)
+	//request handled by coordinator
+	prefList[0].sendGetRequest(key, prefList, db.N, db.R, db.W)
+	//done when getReturn value is read
+	value <-prefList[0].getReturn
+	return value
+
+}
+
+func (db *DB) put(key string, data int, context *Context) {
+	value = &Data{data:data, context:context}
+	prefList = db.getPreferenceList(key)
+	//request handled by coordinator
+	prefList[0].sendPutRequest(key, value, prefList, db.N, db.R, db.W)
+	//done when putReturn signal is read
+   <-prefList[0].putReturn
 }
 
 //create new Dynamo instance
@@ -89,6 +142,10 @@ func (db *DB) AddNode() {
 						map[string]Data{},
 						map[string]Data{},
 		},
+		request: make(chan Request, 20)
+		getReturn: make(chan Data),
+		putReturn: make(chan int),
+		doneCh:    make(chan int)
 	}
 	db.nextId += 1
 	db.nodes = append(db.nodes, &node)
@@ -123,11 +180,8 @@ func (vn VirtualNode) data() *map[string]int {
 	return &vn.node.data[vn.indexInNode]
 }
 
-func (db *DB) getPreferenceList(key string) []int{
-	physicalNodes := []int{}
-	prefereceList := []*Node{}
-	
-	//get next N physical nodes in ring
+func (db *DB) getPreferenceList(key string) []*VirtualNode {
+	//find coordinator node
 	keyHash := int(crc32.ChecksumIEEE([]byte(key)))
 	keyHash %= 360
 	pos := len(db.ring)-1
@@ -140,62 +194,146 @@ func (db *DB) getPreferenceList(key string) []int{
 			coordinator = db.ring[pos]
 		}
 	}
-	curr := pos
-	for len(prefereceList) < db.N {
-		
-	}
-	
+	return db.getNextNPhysical(coordinator)
 }
 
-//delete a node from the hash ring 
-func (db *DB) DeleteNode(node *Node) {
-	for i, n := range db.nodes {
-		if node == n {
-			db.nodes = append(db.nodes[:i], db.nodes[i+1:]...)
-			break
-		}
+func (db *DB) getNextNPhysical(curr *VirtualNode) []*VirtualNode{
+	nextN := []*VirtualNode{}
+	nextN = append(nextN, curr)
+	physicalNodes := map[int]bool{}
+	for _, node := range db.nodes{
+		physicalNodes[node.id] = false
 	}
-	for i, vn := range db.ring {
-		if vn.node == node {
-			db.ring = append(db.ring[:i], db.ring[i+1:]...)
-
-			toTransfer := vn.data()
-			sendTo := db.ring[i].data()
-
-			for key, value := range *toTransfer {
-				(*sendTo)[key] = value
+	physicalNodes[curr.node.id] = true
+	curr := curr.position
+	//get next N-1 physical nodes in ring 
+	for len(nextN) < db.N ; i++ {
+		for {
+			curr += 1
+			if curr >= len(db.ring){
+				curr = 0
+			}
+			next = db.ring[curr]
+			if !physicalNodes[next.node.id] {
+				physicalNodes[next.node.id] = true
+				nextN = append(nextN, next)
+				break
 			}
 		}
 	}
+	return nextN
 }
 
-func (db *DB) getVNodeForKey(key string) VirtualNode {
-	keyHash := int(crc32.ChecksumIEEE([]byte(key)))
-	keyHash %= 360
-	target := db.ring[len(db.ring)-1]
-	for i, _ := range db.ring {
-		if db.ring[len(db.ring)-i-1].position < keyHash {
-			break
-		} else {
-			target = db.ring[len(db.ring)-i-1]
-		}
+func (node *Node) sendPutRequest(key string, data Data, prefList []*VirtualNode, N int, R int, W int, ) {
+	node.request <- Request{
+				type: 1,
+				key: key,
+				data: Data,
+				prefList: prefList,
+				N: N,
+				R: R,
+				W: W,
 	}
-
-	return target
 }
 
-func (db *DB) getDataForKey(key string) *map[string]int {
-	return db.getVNodeForKey(key).data()
+func (node *Node) sendGetRequest(key string, prefList []*VirtualNode, N int, R int, W int, ) {
+	node.request <- Request{
+				type: 0,
+				key: key,
+				prefList: prefList,
+				N: N,
+				R: R,
+				W: W,
+	}
 }
 
-func (db *DB) GetNodeIdForKey(key string) int {
-	return db.getVNodeForKey(key).node.id
-}
 
-func (db *DB) Get(key string) Data {
-	return (*db.getDataForKey(key))[key]
-}
+//ignore this stuff for now//
 
-func (db *DB) Put(key string, value Data) {
-	(*db.getDataForKey(key))[key] = value
-}
+// func (db *DB) getPrevNPhysical(curr *VirtualNode) []*VirtualNode{
+// 	prevN := []*VirtualNode{}
+// 	prevN = append(prevN, curr)
+// 	physicalNodes := map[int]bool{}
+// 	for _, node := range db.nodes{
+// 		physicalNodes[node.id] = false
+// 	}
+// 	physicalNodes[curr.node.id] = true
+// 	curr := curr.position
+// 	//get prev N-1 physical nodes in ring
+// 	for len(nextN) < db.N ; i++ {
+// 		for {
+// 			curr -= 1
+// 			if curr < 0 {
+// 				curr = len(db.ring) - 1
+// 			}
+// 			next = db.ring[curr]
+// 			if !physicalNodes[next.node.id] {
+// 				physicalNodes[next.node.id] = true
+// 				prevN = append(prevN, next)
+// 				break
+// 			}
+// 		}
+// 	}
+// 	return prevN
+// }
+
+// //delete a node from the hash ring 
+// func (db *DB) DeleteNode(node *Node) {
+// 	for i, n := range db.nodes {
+// 		if node == n {
+// 			db.nodes = append(db.nodes[:i], db.nodes[i+1:]...)
+// 			break
+// 		}
+// 	}
+// 	for i, vn := range db.ring {
+// 		if vn.node == node {
+// 			//transfer data to appropriate nodes
+// 			toTransfer := vn.data()
+// 			next = i+1
+// 			if next >= len(db.ring) {
+// 				next = 0
+// 			}
+// 			nextNodes := getNextNPhysical(db.ring[next)
+// 			prevNodes := getPrevNPhysical(vn)
+// 			for key, value := range *toTransfer {
+// 				vn := getVNodeForKey(key)
+// 				for j, n := range prevNodes{
+// 					if vn.position == n.position {
+// 						break
+// 					}
+// 				}
+// 				sendTo := nextNodes[len(nextNodes)-j].data()
+// 				(*sendTo)[key] = value
+// 			}
+// 		}
+// 		//remove virtual node from ring
+// 		db.ring = append(db.ring[:i], db.ring[i+1:]...)
+// 	}
+// // 	//send kill signal to this node so it quits
+// // 	//TODO
+// // }
+
+// func (db *DB) getVNodeForKey(key string) VirtualNode {
+// 	keyHash := int(crc32.ChecksumIEEE([]byte(key)))
+// 	keyHash %= 360
+// 	target := db.ring[len(db.ring)-1]
+// 	for i, _ := range db.ring {
+// 		if db.ring[len(db.ring)-i-1].position < keyHash {
+// 			break
+// 		} else {
+// 			target = db.ring[len(db.ring)-i-1]
+// 		}
+// 	}
+// 	return target
+// }
+
+// func (db *DB) getDataForKey(key string) *map[string]int {
+// 	return db.getVNodeForKey(key).data()
+// }
+
+// func (db *DB) GetNodeIdForKey(key string) int {
+// 	return db.getVNodeForKey(key).node.id
+// }
+
+
+
