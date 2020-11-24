@@ -5,12 +5,12 @@ import (
 	"hash/crc32"
 )
 
-const NUM_NODES = 5
+const NUM_NODES = 8
 
 func display(db *DB) {
 	fmt.Printf("current state:\n")
 	for _, node := range db.nodes {
-		fmt.Printf("Node id: %v, positions on ring: [%v, %v, %v, %v]\n", node.id, node.positions[0], node.positions[1], node.positions[2], node.positions[3])
+		fmt.Printf("Node id: %v, positions on ring: [%v, %v, %v, %v, %v]\n", node.id, node.tokens[0], node.tokens[1], node.tokens[2], node.tokens[3], node.tokens[4]),
 	}
 	fmt.Println()
 }
