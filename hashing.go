@@ -7,13 +7,6 @@ import (
 
 const NUM_NODES = 5
 
-func display(db *DB) {
-	fmt.Printf("hash ring state:\n")
-	for _, vn := range db.ring {
-		fmt.Printf("Node id: %d, position: %d\n", vn.node.id, vn.position)
-	}
-	fmt.Println()
-}
 
 func main() {
 	db := NewDB(3,2,2)
@@ -21,13 +14,12 @@ func main() {
 	for i := 0; i < NUM_NODES; i++ {
 		db.AddNode()
 	}
-	display(db)
 
-	db.put("Maria", 100, &Context{})
-	db.put("John", 20, &Context{})
-	db.put("Anna", 40, &Context{})
-	db.put("Tim", 100, &Context{})
-	db.put("Alex", 10, &Context{})
+	db.put("Maria", 100, &Context{version:0})
+	db.put("John", 20, &Context{version:0})
+	db.put("Anna", 40, &Context{version:0})
+	db.put("Tim", 100, &Context{version:0})
+	db.put("Alex", 10, &Context{version:0})
 
 	keys := [5]string{
 		"Maria", "John", "Anna", "Tim", "Alex",
@@ -44,4 +36,5 @@ func main() {
 	}
 	fmt.Println()
 
+	db.displayData()
 }

@@ -3,7 +3,7 @@ package main
 import (
 	"math/rand"
 	"hash/crc32"
-	//"fmt"
+	"fmt"
 )
 
 type Node struct {
@@ -13,6 +13,8 @@ type Node struct {
 	request 	 chan Request
 	getReturn chan Data
 	putReturn chan int
+	putDone chan int
+	getDone chan int
 	doneCh    chan int
 }
 
@@ -40,6 +42,7 @@ type ClockEntry struct{
 type Request struct {
 	//kind is 0 for get, 1 for put
 	kind     int
+	prefListIndex int
 	key 		string
 	data     *Data
 	prefList []*VirtualNode
@@ -83,8 +86,29 @@ func (node *Node) handleGet(request Request) {
 }
 
 func (node *Node) handlePut(request Request) {
+	//check if this node is the coordinator
+	if request.prefListIndex == 0 {
+		responses := 0
+		//request put for nodes in this keys preference list
+		for i, vn := range request.prefList {
+			//local put
+			if i == 0 {
+				(*vn.data())[request.key] = *request.data
+				responses++
+			} else { //send request
+				vn.node.sendPutRequest(i, request.key, request.data, request.prefList, request.N, request.R, request.W)
+			}
+		}
+		//wait for W put responses
+		for responses < request.W {
+			responses += <-node.putDone
+		}
+		node.putReturn <- 1
+	} else { //handle local put and respond to coordinator
+		(*request.prefList[request.prefListIndex].data())[request.key] = *request.data
+		request.prefList[0].node.putDone <- 1
+	}
 	//signal that request is done being handled
-	node.putReturn <- 1
 	node.doneCh <- 1
 }
 
@@ -92,7 +116,7 @@ func (node *Node) handlePut(request Request) {
 func (db *DB) get(key string) Data {
 	prefList := db.getPreferenceList(key)
 	//request handled by coordinator
-	prefList[0].node.sendGetRequest(key, prefList, db.N, db.R, db.W)
+	prefList[0].node.sendGetRequest(0, key, prefList, db.N, db.R, db.W)
 	//done when getReturn value is read
 	value := <-prefList[0].node.getReturn
 	return value
@@ -100,12 +124,14 @@ func (db *DB) get(key string) Data {
 }
 
 func (db *DB) put(key string, data int, context *Context) {
+	//initialize new object version
+	context = &Context{version: context.version+1, clock:[]*ClockEntry{}}
 	value := &Data{data:data, context:context}
 	prefList := db.getPreferenceList(key)
 	//request handled by coordinator
-	prefList[0].node.sendPutRequest(key, value, prefList, db.N, db.R, db.W)
+	prefList[0].node.sendPutRequest(0, key, value, prefList, db.N, db.R, db.W)
 	//done when putReturn signal is read
-   <-prefList[0].node.putReturn
+   <-prefList[0].node.putDone
 }
 
 //create new Dynamo instance
@@ -151,6 +177,8 @@ func (db *DB) AddNode() {
 		request: make(chan Request, 20),
 		getReturn: make(chan Data, 1),
 		putReturn: make(chan int, 1),
+		putDone:    make(chan int, db.N*2),
+		getDone:    make(chan int, db.N*2),
 		doneCh:    make(chan int, 1),
 	}
 	db.nextId += 1
@@ -230,9 +258,31 @@ func (db *DB) getNextNPhysical(vn VirtualNode, pos int) []*VirtualNode{
 	return nextN
 }
 
-func (node *Node) sendPutRequest(key string, data *Data, prefList []*VirtualNode, N int, R int, W int, ) {
+
+func (db *DB) displayRing() {
+	fmt.Printf("hash ring state:\n")
+	for _, vn := range db.ring {
+		fmt.Printf("Node id: %d, position: %d\n", vn.node.id, vn.position)
+	}
+	fmt.Println()
+}
+
+func (db *DB) displayData() {
+	fmt.Printf("current state:\n")
+	for _, vn := range db.ring {
+		fmt.Printf("Node id: %d, position: %d\n", vn.node.id, vn.position)
+		data := *vn.data()
+		for k, v := range data {
+			fmt.Printf("(key: %s, value: %d) version: %d\n", k, v.data, v.context.version)
+		}
+	}
+	fmt.Println()
+}
+
+func (node *Node) sendPutRequest(index int, key string, data *Data, prefList []*VirtualNode, N int, R int, W int, ) {
 	node.request <- Request{
 				kind: 1,
+				prefListIndex: index,
 				key: key,
 				data: data,
 				prefList: prefList,
@@ -242,9 +292,10 @@ func (node *Node) sendPutRequest(key string, data *Data, prefList []*VirtualNode
 	}
 }
 
-func (node *Node) sendGetRequest(key string, prefList []*VirtualNode, N int, R int, W int, ) {
+func (node *Node) sendGetRequest(index int, key string, prefList []*VirtualNode, N int, R int, W int, ) {
 	node.request <- Request{
 				kind: 0,
+				prefListIndex: index,
 				key: key,
 				prefList: prefList,
 				N: N,
