@@ -3,6 +3,7 @@ package main
 import (
 	"math/rand"
 	"hash/crc32"
+	//"fmt"
 )
 
 type Node struct {
@@ -40,7 +41,7 @@ type Request struct {
 	//kind is 0 for get, 1 for put
 	kind     int
 	key 		string
-	data     Data
+	data     *Data
 	prefList []*VirtualNode
 	N 			int
 	R 			int 
@@ -62,51 +63,56 @@ func (node *Node) run() {
 	for {
 		//read and handle requests as are received
 		request := <-node.request
-		if request.type == 0 {
+		if request.kind == 0 {
+			//fmt.Printf("get request in node %d\n",node.id)
 			node.handleGet(request)
 		} else {
+			//fmt.Printf("put request in node %d\n",node.id)
 			node.handlePut(request)
 		}
 		//wait for done signal before handling more requests
 		<-node.doneCh
+		//fmt.Printf("done read in node %d\n",node.id)
 	}
 }
 
 func (node *Node) handleGet(request Request) {
 	//signal that request is done being handled
+	node.getReturn <- Data{}
 	node.doneCh <- 1
 }
 
 func (node *Node) handlePut(request Request) {
 	//signal that request is done being handled
+	node.putReturn <- 1
 	node.doneCh <- 1
 }
 
 
 func (db *DB) get(key string) Data {
-	prefList = db.getPreferenceList(key)
+	prefList := db.getPreferenceList(key)
 	//request handled by coordinator
-	prefList[0].sendGetRequest(key, prefList, db.N, db.R, db.W)
+	prefList[0].node.sendGetRequest(key, prefList, db.N, db.R, db.W)
 	//done when getReturn value is read
-	value <-prefList[0].getReturn
+	value := <-prefList[0].node.getReturn
 	return value
 
 }
 
 func (db *DB) put(key string, data int, context *Context) {
-	value = &Data{data:data, context:context}
-	prefList = db.getPreferenceList(key)
+	value := &Data{data:data, context:context}
+	prefList := db.getPreferenceList(key)
 	//request handled by coordinator
-	prefList[0].sendPutRequest(key, value, prefList, db.N, db.R, db.W)
+	prefList[0].node.sendPutRequest(key, value, prefList, db.N, db.R, db.W)
 	//done when putReturn signal is read
-   <-prefList[0].putReturn
+   <-prefList[0].node.putReturn
 }
 
 //create new Dynamo instance
 func NewDB(n int, r int, w int) *DB {
-	db = &DB{
+	db := &DB{
 		nodes:  []*Node{},
-		ring:   []int{},
+		ring:   []VirtualNode{},
 		nextId: 0,
 		tokens: []int{},
 		N:		  n,
@@ -121,9 +127,9 @@ func NewDB(n int, r int, w int) *DB {
 
 func (db *DB) getTokens() [5]int{
 	//get 5 random positions in the ring
-	tokens := make([]int, 5)
+	tokens := [5]int{}
 	for i := 0; i < 5; i++ {
-		pos = rand.Intn(len(db.tokens))]
+		pos := rand.Intn(len(db.tokens))
 		tokens[i] = db.tokens[pos]
 		db.tokens = append(db.tokens[:pos], db.tokens[pos+1:]...)
 	}
@@ -134,7 +140,7 @@ func (db *DB) getTokens() [5]int{
 func (db *DB) AddNode() {
 	node := Node{
 		id:        db.nextId,
-		tokens: 	  getTokens(),
+		tokens: 	  db.getTokens(),
 		data:   	  [5]map[string]Data{
 						map[string]Data{},
 						map[string]Data{},
@@ -142,10 +148,10 @@ func (db *DB) AddNode() {
 						map[string]Data{},
 						map[string]Data{},
 		},
-		request: make(chan Request, 20)
-		getReturn: make(chan Data),
-		putReturn: make(chan int),
-		doneCh:    make(chan int)
+		request: make(chan Request, 20),
+		getReturn: make(chan Data, 1),
+		putReturn: make(chan int, 1),
+		doneCh:    make(chan int, 1),
 	}
 	db.nextId += 1
 	db.nodes = append(db.nodes, &node)
@@ -176,7 +182,7 @@ func (db *DB) AddNode() {
 	go node.run()
 }
 
-func (vn VirtualNode) data() *map[string]int {
+func (vn VirtualNode) data() *map[string]Data {
 	return &vn.node.data[vn.indexInNode]
 }
 
@@ -194,29 +200,29 @@ func (db *DB) getPreferenceList(key string) []*VirtualNode {
 			coordinator = db.ring[pos]
 		}
 	}
-	return db.getNextNPhysical(coordinator)
+	return db.getNextNPhysical(coordinator, pos)
 }
 
-func (db *DB) getNextNPhysical(curr *VirtualNode) []*VirtualNode{
+func (db *DB) getNextNPhysical(vn VirtualNode, pos int) []*VirtualNode{
 	nextN := []*VirtualNode{}
-	nextN = append(nextN, curr)
+	nextN = append(nextN, &vn)
 	physicalNodes := map[int]bool{}
 	for _, node := range db.nodes{
 		physicalNodes[node.id] = false
 	}
-	physicalNodes[curr.node.id] = true
-	curr := curr.position
+	physicalNodes[vn.node.id] = true
+	curr := pos
 	//get next N-1 physical nodes in ring 
-	for len(nextN) < db.N ; i++ {
+	for len(nextN) < db.N {
 		for {
 			curr += 1
 			if curr >= len(db.ring){
 				curr = 0
 			}
-			next = db.ring[curr]
+			next := db.ring[curr]
 			if !physicalNodes[next.node.id] {
 				physicalNodes[next.node.id] = true
-				nextN = append(nextN, next)
+				nextN = append(nextN, &next)
 				break
 			}
 		}
@@ -224,11 +230,11 @@ func (db *DB) getNextNPhysical(curr *VirtualNode) []*VirtualNode{
 	return nextN
 }
 
-func (node *Node) sendPutRequest(key string, data Data, prefList []*VirtualNode, N int, R int, W int, ) {
+func (node *Node) sendPutRequest(key string, data *Data, prefList []*VirtualNode, N int, R int, W int, ) {
 	node.request <- Request{
-				type: 1,
+				kind: 1,
 				key: key,
-				data: Data,
+				data: data,
 				prefList: prefList,
 				N: N,
 				R: R,
@@ -238,7 +244,7 @@ func (node *Node) sendPutRequest(key string, data Data, prefList []*VirtualNode,
 
 func (node *Node) sendGetRequest(key string, prefList []*VirtualNode, N int, R int, W int, ) {
 	node.request <- Request{
-				type: 0,
+				kind: 0,
 				key: key,
 				prefList: prefList,
 				N: N,

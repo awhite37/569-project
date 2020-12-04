@@ -5,52 +5,43 @@ import (
 	"hash/crc32"
 )
 
-const NUM_NODES = 8
+const NUM_NODES = 5
 
 func display(db *DB) {
-	fmt.Printf("current state:\n")
-	for _, node := range db.nodes {
-		fmt.Printf("Node id: %v, positions on ring: [%v, %v, %v, %v, %v]\n", node.id, node.tokens[0], node.tokens[1], node.tokens[2], node.tokens[3], node.tokens[4]),
+	fmt.Printf("hash ring state:\n")
+	for _, vn := range db.ring {
+		fmt.Printf("Node id: %d, position: %d\n", vn.node.id, vn.position)
 	}
 	fmt.Println()
 }
 
 func main() {
-	db := NewDB()
+	db := NewDB(3,2,2)
 
 	for i := 0; i < NUM_NODES; i++ {
 		db.AddNode()
 	}
 	display(db)
 
-	db.Put("Maria", 100)
-	db.Put("John", 20)
-	db.Put("Anna", 40)
-	db.Put("Tim", 100)
-	db.Put("Alex", 10)
+	db.put("Maria", 100, &Context{})
+	db.put("John", 20, &Context{})
+	db.put("Anna", 40, &Context{})
+	db.put("Tim", 100, &Context{})
+	db.put("Alex", 10, &Context{})
 
 	keys := [5]string{
 		"Maria", "John", "Anna", "Tim", "Alex",
 	}
 
+	fmt.Println("Preference lists for keys:")
 	for _, k := range keys {
-		fmt.Printf("Hash value of %v: %v\n", k, int(crc32.ChecksumIEEE([]byte(k)))%360)
+		fmt.Printf("key: %s, hash value: %d\n", k, int(crc32.ChecksumIEEE([]byte(k)))%360)
+		prefList := db.getPreferenceList(k)
+		for _, node := range prefList {
+			fmt.Printf("node: %d, position: %d\t", node.node.id, node.position)
+		}
+		fmt.Println()
 	}
 	fmt.Println()
-
-	fmt.Println("Initial Locations:")
-	for _, k := range keys {
-		fmt.Println(k+":", db.GetNodeIdForKey(k))
-	}
-	fmt.Println()
-
-	fmt.Println("Deleting Node 1\n")
-	db.DeleteNode(db.nodes[1])
-	display(db)
-
-	fmt.Println("New Locations")
-	for _, k := range keys {
-		fmt.Println(k+":", db.GetNodeIdForKey(k))
-	}
 
 }
