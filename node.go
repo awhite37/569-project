@@ -1,20 +1,20 @@
 package main
 
 import (
-	"math/rand"
-	"hash/crc32"
 	"fmt"
+	"hash/crc32"
+	"math/rand"
 )
 
 type Node struct {
 	id        int
-	tokens	 [5]int
+	tokens    [5]int
 	data      [5]map[string][]Data
-	request 	 chan Request
+	request   chan Request
 	getReturn chan []Data
 	putReturn chan int
-	putDone chan int
-	getDone chan []Data
+	putDone   chan int
+	getDone   chan []Data
 	doneCh    chan int
 }
 
@@ -25,40 +25,40 @@ type VirtualNode struct {
 }
 
 type Data struct {
-	context	*Context
-	data     int
+	context *Context
+	data    int
 }
 
-type Context struct{
-	version	int
-	clock		[]*ClockEntry
+type Context struct {
+	version int
+	clock   []*ClockEntry
 }
 
-type ClockEntry struct{
-	nodeID   int
-	counter	int
+type ClockEntry struct {
+	nodeID  int
+	counter int
 }
 
 type Request struct {
 	//kind is 0 for get, 1 for put
-	kind     int
+	kind          int
 	prefListIndex int
-	key 		string
-	data     *Data
-	prefList []*VirtualNode
-	N 			int
-	R 			int 
-	W 	      int       
+	key           string
+	data          *Data
+	prefList      []*VirtualNode
+	N             int
+	R             int
+	W             int
 }
 
 type DB struct {
-	nodes  		[]*Node
-	ring		   []VirtualNode
-	nextId 		int
-	tokens 		[]int 
-	N           int
-	R           int
-	W           int
+	nodes  []*Node
+	ring   []VirtualNode
+	nextId int
+	tokens []int
+	N      int
+	R      int
+	W      int
 }
 
 func (node *Node) run() {
@@ -84,7 +84,7 @@ func (node *Node) handleGet(request Request) {
 	if request.prefListIndex == 0 {
 		//clear out old responses
 		for len(node.getDone) > 0 {
-			<- node.getDone
+			<-node.getDone
 		}
 		vals := []Data{}
 		responses := 0
@@ -93,7 +93,7 @@ func (node *Node) handleGet(request Request) {
 			//local get
 			if i == 0 {
 				val := (*vn.data())[request.key]
-				vals = append(vals, val ...)
+				vals = append(vals, val...)
 				responses++
 			} else { //send request
 				vn.node.sendGetRequest(i, request.key, request.prefList, request.N, request.R, request.W)
@@ -102,7 +102,7 @@ func (node *Node) handleGet(request Request) {
 		//wait for R get responses
 		for responses < request.R {
 			val := <-node.getDone
-			vals = append(vals, val ...)
+			vals = append(vals, val...)
 			responses += 1
 		}
 		//TODO: consolidate vals
@@ -122,13 +122,14 @@ func (node *Node) handlePut(request Request) {
 		node.addToClock(request.data)
 		//clear out old responses
 		for len(node.putDone) > 0 {
-			<- node.putDone
+			<-node.putDone
 		}
 		responses := 0
 		//request put for nodes in this keys preference list
 		for i, vn := range request.prefList {
 			//local put
 			if i == 0 {
+				//TODO: consolidate on put
 				(*vn.data())[request.key] = append((*vn.data())[request.key], *request.data)
 				responses++
 			} else { //send request
@@ -141,13 +142,13 @@ func (node *Node) handlePut(request Request) {
 		}
 		node.putReturn <- 1
 	} else { //handle local put and respond to coordinator
+		//TODO: consolidate on put
 		(*request.prefList[request.prefListIndex].data())[request.key] = append((*request.prefList[request.prefListIndex].data())[request.key], *request.data)
 		request.prefList[0].node.putDone <- 1
 	}
 	//signal that request is done being handled
 	node.doneCh <- 1
 }
-
 
 func (db *DB) get(key string) []Data {
 	prefList := db.getPreferenceList(key)
@@ -161,17 +162,17 @@ func (db *DB) get(key string) []Data {
 
 func (db *DB) put(key string, data int, context *Context) {
 	//initialize new object version
-	clock := []*ClockEntry{};
+	clock := []*ClockEntry{}
 	for _, entry := range context.clock {
-		clock = append(clock, &ClockEntry{nodeID:entry.nodeID, counter:entry.counter})
+		clock = append(clock, &ClockEntry{nodeID: entry.nodeID, counter: entry.counter})
 	}
-	newContext := &Context{version: context.version+1, clock:clock}
-	value := &Data{data:data, context:newContext}
+	newContext := &Context{version: context.version + 1, clock: clock}
+	value := &Data{data: data, context: newContext}
 	prefList := db.getPreferenceList(key)
 	//request handled by coordinator
 	prefList[0].node.sendPutRequest(0, key, value, prefList, db.N, db.R, db.W)
 	//done when putReturn signal is read
-   <-prefList[0].node.putReturn
+	<-prefList[0].node.putReturn
 }
 
 func (node *Node) addToClock(data *Data) {
@@ -182,7 +183,7 @@ func (node *Node) addToClock(data *Data) {
 			return
 		}
 	}
-	newEntry := &ClockEntry{nodeID:node.id, counter:1}
+	newEntry := &ClockEntry{nodeID: node.id, counter: 1}
 	data.context.clock = append(clock, newEntry)
 }
 
@@ -193,9 +194,9 @@ func NewDB(n int, r int, w int) *DB {
 		ring:   []VirtualNode{},
 		nextId: 0,
 		tokens: []int{},
-		N:		  n,
-		R:		  r,
-		W: 	  w,
+		N:      n,
+		R:      r,
+		W:      w,
 	}
 	for i := 0; i < 360; i++ {
 		db.tokens = append(db.tokens, i)
@@ -203,7 +204,7 @@ func NewDB(n int, r int, w int) *DB {
 	return db
 }
 
-func (db *DB) getTokens() [5]int{
+func (db *DB) getTokens() [5]int {
 	//get 5 random positions in the ring
 	tokens := [5]int{}
 	for i := 0; i < 5; i++ {
@@ -217,20 +218,20 @@ func (db *DB) getTokens() [5]int{
 //add a new node to the hash ring
 func (db *DB) AddNode() {
 	node := Node{
-		id:        db.nextId,
-		tokens: 	  db.getTokens(),
-		data:   	  [5]map[string][]Data{
-						map[string][]Data{},
-						map[string][]Data{},
-						map[string][]Data{},
-						map[string][]Data{},
-						map[string][]Data{},
+		id:     db.nextId,
+		tokens: db.getTokens(),
+		data: [5]map[string][]Data{
+			map[string][]Data{},
+			map[string][]Data{},
+			map[string][]Data{},
+			map[string][]Data{},
+			map[string][]Data{},
 		},
-		request: make(chan Request, 20),
+		request:   make(chan Request, 20),
 		getReturn: make(chan []Data, 1),
 		putReturn: make(chan int, 1),
-		putDone:    make(chan int, db.N*2),
-		getDone:    make(chan []Data, db.N*2),
+		putDone:   make(chan int, db.N*2),
+		getDone:   make(chan []Data, db.N*2),
 		doneCh:    make(chan int, 1),
 	}
 	db.nextId += 1
@@ -270,33 +271,33 @@ func (db *DB) getPreferenceList(key string) []*VirtualNode {
 	//find coordinator node
 	keyHash := int(crc32.ChecksumIEEE([]byte(key)))
 	keyHash %= 360
-	pos := len(db.ring)-1
+	pos := len(db.ring) - 1
 	coordinator := db.ring[pos]
 	for i, _ := range db.ring {
 		if db.ring[len(db.ring)-i-1].position < keyHash {
 			break
 		} else {
-			pos = len(db.ring)-i-1
+			pos = len(db.ring) - i - 1
 			coordinator = db.ring[pos]
 		}
 	}
 	return db.getNextNPhysical(coordinator, pos)
 }
 
-func (db *DB) getNextNPhysical(vn VirtualNode, pos int) []*VirtualNode{
+func (db *DB) getNextNPhysical(vn VirtualNode, pos int) []*VirtualNode {
 	nextN := []*VirtualNode{}
 	nextN = append(nextN, &vn)
 	physicalNodes := map[int]bool{}
-	for _, node := range db.nodes{
+	for _, node := range db.nodes {
 		physicalNodes[node.id] = false
 	}
 	physicalNodes[vn.node.id] = true
 	curr := pos
-	//get next N-1 physical nodes in ring 
+	//get next N-1 physical nodes in ring
 	for len(nextN) < db.N {
 		for {
 			curr += 1
-			if curr >= len(db.ring){
+			if curr >= len(db.ring) {
 				curr = 0
 			}
 			next := db.ring[curr]
@@ -309,7 +310,6 @@ func (db *DB) getNextNPhysical(vn VirtualNode, pos int) []*VirtualNode{
 	}
 	return nextN
 }
-
 
 func (db *DB) displayRing() {
 	fmt.Printf("hash ring state:\n")
@@ -340,34 +340,34 @@ func (db *DB) displayData() {
 
 func (db *DB) displayPreference(key string) {
 	fmt.Printf("key: %s, hash value: %d\n", key, int(crc32.ChecksumIEEE([]byte(key)))%360)
-		prefList := db.getPreferenceList(key)
-		for _, node := range prefList {
-			fmt.Printf("node: %d, position: %d\t", node.node.id, node.position)
-		}
+	prefList := db.getPreferenceList(key)
+	for _, node := range prefList {
+		fmt.Printf("node: %d, position: %d\t", node.node.id, node.position)
+	}
 	fmt.Println()
 }
 
-func (node *Node) sendPutRequest(index int, key string, data *Data, prefList []*VirtualNode, N int, R int, W int, ) {
+func (node *Node) sendPutRequest(index int, key string, data *Data, prefList []*VirtualNode, N int, R int, W int) {
 	node.request <- Request{
-				kind: 1,
-				prefListIndex: index,
-				key: key,
-				data: data,
-				prefList: prefList,
-				N: N,
-				R: R,
-				W: W,
+		kind:          1,
+		prefListIndex: index,
+		key:           key,
+		data:          data,
+		prefList:      prefList,
+		N:             N,
+		R:             R,
+		W:             W,
 	}
 }
 
-func (node *Node) sendGetRequest(index int, key string, prefList []*VirtualNode, N int, R int, W int, ) {
+func (node *Node) sendGetRequest(index int, key string, prefList []*VirtualNode, N int, R int, W int) {
 	node.request <- Request{
-				kind: 0,
-				prefListIndex: index,
-				key: key,
-				prefList: prefList,
-				N: N,
-				R: R,
-				W: W,
+		kind:          0,
+		prefListIndex: index,
+		key:           key,
+		prefList:      prefList,
+		N:             N,
+		R:             R,
+		W:             W,
 	}
 }
