@@ -16,6 +16,8 @@ type Node struct {
 	putDone   chan int
 	getDone   chan []Data
 	doneCh    chan int
+	table         []*TableEntry
+	tableInput    chan []*TableEntry
 }
 
 type VirtualNode struct {
@@ -61,21 +63,20 @@ type DB struct {
 	W      int
 }
 
-func (node *Node) run() {
+func (node *Node) run(db *DB) {
 	//main function for running a node
+	//launch gossip protocol
+	go node.gossip(db)
 	for {
 		//read and handle requests as are received
 		request := <-node.request
 		if request.kind == 0 {
-			//fmt.Printf("get request in node %d\n",node.id)
 			node.handleGet(request)
 		} else {
-			//fmt.Printf("put request in node %d\n",node.id)
 			node.handlePut(request)
 		}
 		//wait for done signal before handling more requests
 		<-node.doneCh
-		//fmt.Printf("done read in node %d\n",node.id)
 	}
 }
 
@@ -95,8 +96,11 @@ func (node *Node) handleGet(request Request) {
 				val := (*vn.data())[request.key]
 				vals = append(vals, val...)
 				responses++
-			} else { //send request
-				vn.node.sendGetRequest(i, request.key, request.prefList, request.N, request.R, request.W)
+			} else { 
+				//send request to healthy nodes
+				if !node.hasFailed(vn.node.id) {
+					vn.node.sendGetRequest(i, request.key, request.prefList, request.N, request.R, request.W)
+				}
 			}
 		}
 		//wait for R get responses
@@ -132,8 +136,11 @@ func (node *Node) handlePut(request Request) {
 				//TODO: consolidate on put
 				(*vn.data())[request.key] = append((*vn.data())[request.key], *request.data)
 				responses++
-			} else { //send request
-				vn.node.sendPutRequest(i, request.key, request.data, request.prefList, request.N, request.R, request.W)
+			} else { 
+				//send request to healthy nodes
+				if !node.hasFailed(vn.node.id) {
+					vn.node.sendPutRequest(i, request.key, request.data, request.prefList, request.N, request.R, request.W)
+				}
 			}
 		}
 		//wait for W put responses
@@ -233,6 +240,11 @@ func (db *DB) AddNode() {
 		putDone:   make(chan int, db.N*2),
 		getDone:   make(chan []Data, db.N*2),
 		doneCh:    make(chan int, 1),
+		table:	  make([]*TableEntry, NUM_NODES),
+		tableInput:make(chan []*TableEntry, NUM_NODES*2),
+	}
+	for j := 0; j < NUM_NODES; j++ {
+		node.table[j] = &TableEntry{id: j, hb: 0, t: 0}
 	}
 	db.nextId += 1
 	db.nodes = append(db.nodes, &node)
@@ -260,7 +272,7 @@ func (db *DB) AddNode() {
 		}
 	}
 	//launch node as goroutine
-	go node.run()
+	go node.run(db)
 }
 
 func (vn VirtualNode) data() *map[string][]Data {

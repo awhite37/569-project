@@ -1,5 +1,5 @@
-To run consistent hashing:
+To run:
 
-go build hashing.go node.go 
+go build main.go node.go gossip.go
 
-./hashing
+./main
