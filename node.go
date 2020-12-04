@@ -9,12 +9,12 @@ import (
 type Node struct {
 	id        int
 	tokens	 [5]int
-	data      [5]map[string]Data
+	data      [5]map[string][]Data
 	request 	 chan Request
-	getReturn chan Data
+	getReturn chan []Data
 	putReturn chan int
 	putDone chan int
-	getDone chan int
+	getDone chan []Data
 	doneCh    chan int
 }
 
@@ -80,20 +80,56 @@ func (node *Node) run() {
 }
 
 func (node *Node) handleGet(request Request) {
+	//check if this node is the coordinator
+	if request.prefListIndex == 0 {
+		//clear out old responses
+		for len(node.getDone) > 0 {
+			<- node.getDone
+		}
+		vals := []Data{}
+		responses := 0
+		//request get for nodes in this keys preference list
+		for i, vn := range request.prefList {
+			//local get
+			if i == 0 {
+				val := (*vn.data())[request.key]
+				vals = append(vals, val ...)
+				responses++
+			} else { //send request
+				vn.node.sendGetRequest(i, request.key, request.prefList, request.N, request.R, request.W)
+			}
+		}
+		//wait for R get responses
+		for responses < request.R {
+			val := <-node.getDone
+			vals = append(vals, val ...)
+			responses += 1
+		}
+		//TODO: consolidate vals
+		node.getReturn <- vals
+	} else { //handle local put and respond to coordinator
+		vals := (*request.prefList[request.prefListIndex].data())[request.key]
+		request.prefList[0].node.getDone <- vals
+	}
 	//signal that request is done being handled
-	node.getReturn <- Data{}
 	node.doneCh <- 1
 }
 
 func (node *Node) handlePut(request Request) {
 	//check if this node is the coordinator
 	if request.prefListIndex == 0 {
+		//update vector clock
+		node.addToClock(request.data)
+		//clear out old responses
+		for len(node.putDone) > 0 {
+			<- node.putDone
+		}
 		responses := 0
 		//request put for nodes in this keys preference list
 		for i, vn := range request.prefList {
 			//local put
 			if i == 0 {
-				(*vn.data())[request.key] = *request.data
+				(*vn.data())[request.key] = append((*vn.data())[request.key], *request.data)
 				responses++
 			} else { //send request
 				vn.node.sendPutRequest(i, request.key, request.data, request.prefList, request.N, request.R, request.W)
@@ -105,7 +141,7 @@ func (node *Node) handlePut(request Request) {
 		}
 		node.putReturn <- 1
 	} else { //handle local put and respond to coordinator
-		(*request.prefList[request.prefListIndex].data())[request.key] = *request.data
+		(*request.prefList[request.prefListIndex].data())[request.key] = append((*request.prefList[request.prefListIndex].data())[request.key], *request.data)
 		request.prefList[0].node.putDone <- 1
 	}
 	//signal that request is done being handled
@@ -113,7 +149,7 @@ func (node *Node) handlePut(request Request) {
 }
 
 
-func (db *DB) get(key string) Data {
+func (db *DB) get(key string) []Data {
 	prefList := db.getPreferenceList(key)
 	//request handled by coordinator
 	prefList[0].node.sendGetRequest(0, key, prefList, db.N, db.R, db.W)
@@ -125,13 +161,29 @@ func (db *DB) get(key string) Data {
 
 func (db *DB) put(key string, data int, context *Context) {
 	//initialize new object version
-	context = &Context{version: context.version+1, clock:[]*ClockEntry{}}
-	value := &Data{data:data, context:context}
+	clock := []*ClockEntry{};
+	for _, entry := range context.clock {
+		clock = append(clock, &ClockEntry{nodeID:entry.nodeID, counter:entry.counter})
+	}
+	newContext := &Context{version: context.version+1, clock:clock}
+	value := &Data{data:data, context:newContext}
 	prefList := db.getPreferenceList(key)
 	//request handled by coordinator
 	prefList[0].node.sendPutRequest(0, key, value, prefList, db.N, db.R, db.W)
 	//done when putReturn signal is read
-   <-prefList[0].node.putDone
+   <-prefList[0].node.putReturn
+}
+
+func (node *Node) addToClock(data *Data) {
+	clock := data.context.clock
+	for _, entry := range clock {
+		if entry.nodeID == node.id {
+			entry.counter += 1
+			return
+		}
+	}
+	newEntry := &ClockEntry{nodeID:node.id, counter:1}
+	data.context.clock = append(clock, newEntry)
 }
 
 //create new Dynamo instance
@@ -167,18 +219,18 @@ func (db *DB) AddNode() {
 	node := Node{
 		id:        db.nextId,
 		tokens: 	  db.getTokens(),
-		data:   	  [5]map[string]Data{
-						map[string]Data{},
-						map[string]Data{},
-						map[string]Data{},
-						map[string]Data{},
-						map[string]Data{},
+		data:   	  [5]map[string][]Data{
+						map[string][]Data{},
+						map[string][]Data{},
+						map[string][]Data{},
+						map[string][]Data{},
+						map[string][]Data{},
 		},
 		request: make(chan Request, 20),
-		getReturn: make(chan Data, 1),
+		getReturn: make(chan []Data, 1),
 		putReturn: make(chan int, 1),
 		putDone:    make(chan int, db.N*2),
-		getDone:    make(chan int, db.N*2),
+		getDone:    make(chan []Data, db.N*2),
 		doneCh:    make(chan int, 1),
 	}
 	db.nextId += 1
@@ -210,7 +262,7 @@ func (db *DB) AddNode() {
 	go node.run()
 }
 
-func (vn VirtualNode) data() *map[string]Data {
+func (vn VirtualNode) data() *map[string][]Data {
 	return &vn.node.data[vn.indexInNode]
 }
 
@@ -273,9 +325,25 @@ func (db *DB) displayData() {
 		fmt.Printf("Node id: %d, position: %d\n", vn.node.id, vn.position)
 		data := *vn.data()
 		for k, v := range data {
-			fmt.Printf("(key: %s, value: %d) version: %d\n", k, v.data, v.context.version)
+			fmt.Printf("\tkey %s: \n", k)
+			for _, ver := range v {
+				fmt.Printf("\t(value: %d, version: %d, clock: ", ver.data, ver.context.version)
+				for _, entry := range ver.context.clock {
+					fmt.Printf("(%d, %d)", entry.nodeID, entry.counter)
+				}
+				fmt.Printf(")\n")
+			}
 		}
 	}
+	fmt.Println()
+}
+
+func (db *DB) displayPreference(key string) {
+	fmt.Printf("key: %s, hash value: %d\n", key, int(crc32.ChecksumIEEE([]byte(key)))%360)
+		prefList := db.getPreferenceList(key)
+		for _, node := range prefList {
+			fmt.Printf("node: %d, position: %d\t", node.node.id, node.position)
+		}
 	fmt.Println()
 }
 
@@ -303,94 +371,3 @@ func (node *Node) sendGetRequest(index int, key string, prefList []*VirtualNode,
 				W: W,
 	}
 }
-
-
-//ignore this stuff for now//
-
-// func (db *DB) getPrevNPhysical(curr *VirtualNode) []*VirtualNode{
-// 	prevN := []*VirtualNode{}
-// 	prevN = append(prevN, curr)
-// 	physicalNodes := map[int]bool{}
-// 	for _, node := range db.nodes{
-// 		physicalNodes[node.id] = false
-// 	}
-// 	physicalNodes[curr.node.id] = true
-// 	curr := curr.position
-// 	//get prev N-1 physical nodes in ring
-// 	for len(nextN) < db.N ; i++ {
-// 		for {
-// 			curr -= 1
-// 			if curr < 0 {
-// 				curr = len(db.ring) - 1
-// 			}
-// 			next = db.ring[curr]
-// 			if !physicalNodes[next.node.id] {
-// 				physicalNodes[next.node.id] = true
-// 				prevN = append(prevN, next)
-// 				break
-// 			}
-// 		}
-// 	}
-// 	return prevN
-// }
-
-// //delete a node from the hash ring 
-// func (db *DB) DeleteNode(node *Node) {
-// 	for i, n := range db.nodes {
-// 		if node == n {
-// 			db.nodes = append(db.nodes[:i], db.nodes[i+1:]...)
-// 			break
-// 		}
-// 	}
-// 	for i, vn := range db.ring {
-// 		if vn.node == node {
-// 			//transfer data to appropriate nodes
-// 			toTransfer := vn.data()
-// 			next = i+1
-// 			if next >= len(db.ring) {
-// 				next = 0
-// 			}
-// 			nextNodes := getNextNPhysical(db.ring[next)
-// 			prevNodes := getPrevNPhysical(vn)
-// 			for key, value := range *toTransfer {
-// 				vn := getVNodeForKey(key)
-// 				for j, n := range prevNodes{
-// 					if vn.position == n.position {
-// 						break
-// 					}
-// 				}
-// 				sendTo := nextNodes[len(nextNodes)-j].data()
-// 				(*sendTo)[key] = value
-// 			}
-// 		}
-// 		//remove virtual node from ring
-// 		db.ring = append(db.ring[:i], db.ring[i+1:]...)
-// 	}
-// // 	//send kill signal to this node so it quits
-// // 	//TODO
-// // }
-
-// func (db *DB) getVNodeForKey(key string) VirtualNode {
-// 	keyHash := int(crc32.ChecksumIEEE([]byte(key)))
-// 	keyHash %= 360
-// 	target := db.ring[len(db.ring)-1]
-// 	for i, _ := range db.ring {
-// 		if db.ring[len(db.ring)-i-1].position < keyHash {
-// 			break
-// 		} else {
-// 			target = db.ring[len(db.ring)-i-1]
-// 		}
-// 	}
-// 	return target
-// }
-
-// func (db *DB) getDataForKey(key string) *map[string]int {
-// 	return db.getVNodeForKey(key).data()
-// }
-
-// func (db *DB) GetNodeIdForKey(key string) int {
-// 	return db.getVNodeForKey(key).node.id
-// }
-
-
-

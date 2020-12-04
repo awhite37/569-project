@@ -2,11 +2,9 @@ package main
 
 import (
 	"fmt"
-	"hash/crc32"
 )
 
 const NUM_NODES = 5
-
 
 func main() {
 	db := NewDB(3,2,2)
@@ -27,14 +25,16 @@ func main() {
 
 	fmt.Println("Preference lists for keys:")
 	for _, k := range keys {
-		fmt.Printf("key: %s, hash value: %d\n", k, int(crc32.ChecksumIEEE([]byte(k)))%360)
-		prefList := db.getPreferenceList(k)
-		for _, node := range prefList {
-			fmt.Printf("node: %d, position: %d\t", node.node.id, node.position)
-		}
-		fmt.Println()
+		db.displayPreference(k)
 	}
 	fmt.Println()
 
 	db.displayData()
+
+	//update value at key
+	data := db.get("Maria")
+	db.put("Maria", 200, data[0].context)
+
+	db.displayData()
 }
+
