@@ -161,7 +161,7 @@ func (node *Node) handlePut(request Request) {
 			//local put
 			if i == 0 {
 				//TODO: consolidate on put
-				(*vn.data())[request.key] = append((*vn.data())[request.key], *request.data)
+				(*vn.data())[request.key] = consolidateDataVals(append((*vn.data())[request.key], *request.data))
 				responses++
 			} else { 
 				//send request to healthy nodes
@@ -176,8 +176,7 @@ func (node *Node) handlePut(request Request) {
 		}
 		node.putReturn <- 1
 	} else { //handle local put and respond to coordinator
-		//TODO: consolidate on put
-		(*request.prefList[request.prefListIndex].data())[request.key] = append((*request.prefList[request.prefListIndex].data())[request.key], *request.data)
+		(*request.prefList[request.prefListIndex].data())[request.key] = consolidateDataVals(append((*request.prefList[request.prefListIndex].data())[request.key], *request.data))
 		request.prefList[0].node.putDone <- 1
 	}
 	//signal that request is done being handled
