@@ -80,6 +80,33 @@ func (node *Node) run(db *DB) {
 	}
 }
 
+func dataMapToDataArray(m map[int]Data) []Data {
+	i := 0
+	a := make([]Data,len(m))
+	for _,val := range m {
+		a[i] = val
+		i += 1
+	}
+	return a
+}
+
+func consolidateDataVals(vals []Data) []Data {
+	m := make(map[int]Data)
+	for _,val := range vals {
+		for i,clockEntry := range val.context.clock {
+			stored := m[clockEntry.nodeID]
+			if _,ok := m[clockEntry.nodeID]; !ok {
+				m[clockEntry.nodeID] = val
+				continue
+			}
+			if clockEntry.counter > stored.context.clock[i].counter {
+				m[clockEntry.nodeID] = val
+			}
+		}
+	}
+	return dataMapToDataArray(m)
+}
+
 func (node *Node) handleGet(request Request) {
 	//check if this node is the coordinator
 	if request.prefListIndex == 0 {
@@ -110,7 +137,7 @@ func (node *Node) handleGet(request Request) {
 			responses += 1
 		}
 		//TODO: consolidate vals
-		node.getReturn <- vals
+		node.getReturn <- consolidateDataVals(vals)
 	} else { //handle local put and respond to coordinator
 		vals := (*request.prefList[request.prefListIndex].data())[request.key]
 		request.prefList[0].node.getDone <- vals
