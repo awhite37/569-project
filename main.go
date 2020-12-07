@@ -23,6 +23,8 @@ func main() {
 		"Maria", "John", "Anna", "Tim", "Alex",
 	}
 
+	db.displayRing()
+
 	fmt.Println("Preference lists for keys:")
 	for _, k := range keys {
 		db.displayPreference(k)
@@ -30,6 +32,7 @@ func main() {
 	fmt.Println()
 
 	db.displayData()
+	fmt.Println("Updating value for key 'Maria'\n")
 	//update value at key
 	data := db.get("Maria")
 	db.put("Maria", 200, data[0].context)

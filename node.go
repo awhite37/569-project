@@ -80,31 +80,39 @@ func (node *Node) run(db *DB) {
 	}
 }
 
-func dataMapToDataArray(m map[int]Data) []Data {
-	i := 0
-	a := make([]Data,len(m))
-	for _,val := range m {
-		a[i] = val
-		i += 1
-	}
-	return a
-}
-
 func consolidateDataVals(vals []Data) []Data {
-	m := make(map[int]Data)
-	for _,val := range vals {
-		for i,clockEntry := range val.context.clock {
-			stored := m[clockEntry.nodeID]
-			if _,ok := m[clockEntry.nodeID]; !ok {
-				m[clockEntry.nodeID] = val
-				continue
-			}
-			if clockEntry.counter > stored.context.clock[i].counter {
-				m[clockEntry.nodeID] = val
+	overwrite := map[int]bool{}
+	returnVals := []Data{}
+	for i, val1 := range vals {
+		VAL2: for j, val2 := range vals {
+			if i != j && !overwrite[j]{
+				for _, entry1 := range val1.context.clock {
+					hasEntry := false;
+					for _, entry2 := range val2.context.clock {
+						if entry2.nodeID == entry1.nodeID {
+							if entry2.counter < entry1.counter {
+								continue VAL2
+							} else {
+								hasEntry = true;
+								break;
+							}
+						}
+					}
+					if !hasEntry {
+						continue VAL2
+					}
+				}
+				overwrite[i] = true; 
+				break VAL2
 			}
 		}
 	}
-	return dataMapToDataArray(m)
+	for i, val := range vals {
+		if !overwrite[i] {
+			returnVals = append(returnVals, val)
+		}
+	}
+	return returnVals
 }
 
 func (node *Node) handleGet(request Request) {
